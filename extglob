@@ -1,0 +1,8 @@
+#!/bin/bash
+
+shopt -s dotglob
+shopt -s extglob
+
+IFS=$'\n'
+
+[ "$1" ] && ls -d1 $1

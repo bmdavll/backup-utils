@@ -1,0 +1,128 @@
+#!/bin/bash
+
+PROG=$(basename "$0")
+IFS=$'\n'
+
+DEFS=$HOME/backup/sync
+EXT=".def"
+MNT=$(cat /etc/fstab | grep "$HOME" | grep "\<nfs\>" | awk '{print $2}')
+
+printUsage() {
+	echo "Usage: $PROG [-n] [up|down]..."
+}
+
+errorUsage() {
+	printUsage >&2
+	if [ $# -gt 0 ]; then
+		echo >&2
+		echo >&2 "$PROG: $@"
+	fi
+	exit 2
+}
+
+cleanUp() {
+	local mounted=$(mount | grep "$MNT" | awk '{print $3}')
+	[ "$mounted" = "$MNT" ] && sudo umount "$MNT"
+}
+
+normalExit() {
+	cleanUp
+	exit 0
+}
+
+errorExit() {
+	[ "$1" ] && echo >&2 "$PROG: $1"
+	exit 3
+}
+trap "errorExit" 1 2 3 15
+
+flags=(--delete -H -o "--out-format=%n%L --hard-links --update")
+
+declare -a argv
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-h*|--help|-\?*)	printUsage
+						exit 0
+						;;
+	-n|--simulate)		flags+=("$1")
+						shift
+						;;
+	--*)				errorUsage "unknown option: ${1%%=*}"
+						;;
+	-?*)				errorUsage "unknown option: ${1:0:2}"
+						;;
+	*)					argv+=("$1")
+						shift
+						;;
+	esac
+done
+
+set -- "${argv[@]}" "$@"
+unset argv
+
+if [ ! -d "$DEFS" ]; then
+	errorExit "$DEFS: Directory not found"
+elif [ ! -r "$DEFS" ]; then
+	errorExit "$DEFS: Permission denied"
+elif ! ls "$DEFS"/*"$EXT" &>/dev/null; then
+	errorExit "$DEFS: No definitions found"
+elif [ ! -d "$MNT" ]; then
+	errorExit "Can't resolve mount point"
+elif [ "$(mount | grep "$MNT" | awk '{print $3}')" = "$MNT" ]; then
+	sudo umount "$MNT"
+fi
+
+if ! sudo mount "$MNT"; then
+	errorExit "Mount error"
+fi
+
+transfer() {
+	local src="$2" dst="$3"
+	if [ -z "$src" -a -z "$dst" ]; then
+		errorExit
+	elif [ -n "$src" -a ! -r "$src" ]; then
+		errorExit "$src: Permission denied"
+	elif [ -n "$dst" -a ! -w "$dst" ]; then
+		errorExit "$dst: Permission denied"
+	fi
+	local msg src_opt=() dst_opt=()
+	[ "$src" ] && msg+=" from $src" && src_opt+=(-s "$src")
+	[ "$dst" ] && msg+=" to $dst"   && dst_opt+=(-t "$dst")
+	echo "$1 changes$msg"
+	yarf.py "${flags[@]}" "${src_opt[@]}" "${dst_opt[@]}" "$DEFS"/*"$EXT" \
+	| grep -v '/$' \
+	| grep -v '/\.git/' \
+	| file-list-summary.py
+	codes=("${PIPESTATUS[@]}")
+	[ ${codes[0]} -ne 0 ] && errorExit
+	[ ${codes[1]} -eq 0 ] && echo
+}
+
+if [ $# -eq 0 ]; then
+	transfer "Propagating" "" "$MNT"
+	transfer "Downloading" "$MNT" "$HOME"
+else
+	for pass in 1 2; do
+		up=
+		down=
+		for arg in "$@"; do
+			if [ "$arg" = "up" ]; then
+				[ "$up" ] && errorUsage
+				up=1
+				[ $pass -eq 2 ] && transfer "Propagating" "" "$MNT"
+			elif [ "$arg" = "down" ]; then
+				[ "$down" ] && errorUsage
+				down=1
+				[ $pass -eq 2 ] && transfer "Downloading" "$MNT" "$HOME"
+			else
+				errorUsage
+			fi
+		done
+	done
+fi
+
+echo "Done"
+normalExit
+
+# vim:set ts=4 sw=4 noet:

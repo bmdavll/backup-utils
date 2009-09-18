@@ -1,0 +1,232 @@
+#!/bin/bash
+
+PROG=$(basename "$0")
+IFS=$'\n'
+
+LOCAL=$HOME/backup
+DISK=/media/disk
+EXT=".def"
+
+# limits
+LO=1
+HI=9
+
+# defaults if given no arguments
+START=$LO
+END=$HI
+
+printUsage() {
+	echo "Usage: $PROG [-l] [-c] [-t DISK] [ START[-[END]] | -END ]..."
+}
+
+errorUsage() {
+	printUsage >&2
+	if [ $# -gt 0 ]; then
+		echo >&2
+		echo >&2 "$PROG: $@"
+	fi
+	exit 2
+}
+
+errorExit() {
+	[ "$1" ] && echo >&2 "$PROG: $1"
+	exit 3
+}
+trap "errorExit" 1 2 3 15
+
+declare -a argv
+declare rest
+
+lflag=
+flags=(--delete -H -o "--out-format=%n%L --hard-links" --extglob)
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-h*|--help|-\?*)	printUsage
+						exit 0
+						;;
+	-l|--list)			lflag=1 && shift
+						;;
+	-l*)				lflag=1
+						rest="${1:2}" && shift
+						[ "${rest:0:1}" != "-" ] && rest="-$rest"
+						set -- "$rest" "$@"
+						;;
+	-c|--checksum)		flags+=(-o "$1") && shift
+						;;
+	-c*)				flags+=(-o "-c")
+						rest="${1:2}" && shift
+						[ "${rest:0:1}" != "-" ] && rest="-$rest"
+						set -- "$rest" "$@"
+						;;
+	-t)					shift
+						[ ! "$1" ] && errorUsage "-t requires an argument"
+						DISK="$1" && shift
+						;;
+	-t*)				DISK="${1:2}" && shift
+						;;
+	--target=*)			DISK="${1#--target=}" && shift
+						[ ! "$DISK" ] && errorUsage "--target requires an argument"
+						;;
+	-[0-9])				argv+=("$1") && shift
+						;;
+	--)					shift && break
+						;;
+	--*)				errorUsage "unknown option: ${1%%=*}"
+						;;
+	-?*)				errorUsage "unknown option: ${1:0:2}"
+						;;
+	*)					argv+=("$1") && shift
+						;;
+	esac
+done
+
+set -- "${argv[@]}" "$@"
+unset argv rest
+
+declare -a levels
+
+for (( i = $LO; i <= $HI; ++i )); do
+	levels[$i]=
+done
+
+if [ $# -eq 0 ]; then
+	for (( i = $START; i <= $END; ++i )); do
+		levels[$i]=1
+	done
+else
+	RANGE="$LO-$HI"
+	START_PAT='^\(['$RANGE']\)\(-\?\)$'
+	END_PAT='^\(['$RANGE']\?\)-\(['$RANGE']\)$'
+	for spec in "$@"; do
+		if echo "$spec" | grep "$START_PAT" &>/dev/null; then
+			set $(echo "$spec" | sed "s/$START_PAT/\1\\$IFS\2/")
+			START="$1"
+			if [ -z "$2" ]; then
+				END="$START"
+			else
+				END="$HI"
+			fi
+		elif echo "$spec" | grep "$END_PAT" &>/dev/null; then
+			set $(echo "$spec" | sed "s/$END_PAT/\1\\$IFS\2/")
+			if [ -z "$2" ]; then
+				START="$LO"
+				END="$1"
+			else
+				START="$1"
+				END="$2"
+			fi
+		else
+			errorUsage
+		fi
+		if [ $END -lt $START ]; then
+			errorUsage
+		else
+			for (( i = $START; i <= $END; ++i )); do
+				levels[$i]=1
+			done
+		fi
+	done
+	set --
+fi
+
+LOCAL="${LOCAL%/}/$HOSTNAME"
+
+if [ ! -d "$LOCAL" ]; then
+	errorExit "$LOCAL: Directory not found"
+elif [ ! -r "$LOCAL" -o ! -w "$LOCAL" ]; then
+	errorExit "$LOCAL: Permission denied"
+elif ! ls "$LOCAL"/?/*"$EXT" &>/dev/null; then
+	errorExit "$LOCAL: No definitions found"
+fi
+
+declare -i code
+
+if [ "$lflag" ]; then
+	code=1
+	for i in "${!levels[@]}"; do
+		[ ! "${levels[$i]}" ] && continue
+		for def in $(ls "$LOCAL/$i"/*"$EXT" 2>/dev/null); do
+			echo "${def#$LOCAL/}"
+			code=0
+		done
+	done
+	exit $code
+fi
+
+code=0
+
+if [ "${levels[1]}" ]; then
+	echo "Creating archives in $LOCAL"
+	for tgz in $(ls -d "$LOCAL"/*.tar.gz 2>/dev/null); do
+		mv "$tgz" "$tgz.bak"
+	done
+	tarf.py -Hzf -t "$LOCAL" "$LOCAL/1"/*"$EXT"
+	if [ $? -ne 0 ]; then
+		code+=1
+		echo "Done (with errors)"
+	else
+		(cd "$LOCAL" && ls -sh *.tar.gz)
+		echo "Done"
+	fi
+	echo
+fi
+
+DISK="${DISK%/}"
+
+if [ "$DISK" = "/media/disk" ]; then
+	for i in {1..5}; do
+		TESTDISK="$DISK/$HOSTNAME"
+		if [ -d "$TESTDISK" -a -w "$TESTDISK" ]; then
+			DISK="$TESTDISK"
+			break
+		fi
+		TESTDISK="$DISK/backup/$HOSTNAME"
+		if [ -d "$TESTDISK" -a -w "$TESTDISK" ]; then
+			DISK="$TESTDISK"
+			break
+		fi
+		DISK=$(echo "$DISK" | sed 's#\(-.\)\?$#-'$i'#')
+	done
+	[ ! -d "$TESTDISK" -o ! -w "$TESTDISK" ] && DISK="/media/disk/$HOSTNAME"
+else
+	DISK="$DISK/$HOSTNAME"
+fi
+
+if [ -d "$DISK" -a -w "$DISK" ]; then
+	echo "Syncing with $DISK"
+
+	declare -i synccode=0
+
+	[ "$BACKUP_LOG" ] && echo "◘1 $(date +'%Y-%m-%d %H:%M:%S %Z')" >>"$BACKUP_LOG"
+
+	for i in "${!levels[@]}"; do
+		if [ "${levels[$i]}" ]; then
+			for def in $(ls "$LOCAL/$i"/*"$EXT" 2>/dev/null); do
+				echo "Reading ${def#$LOCAL/}"
+				yarf.py "${flags[@]}" -t "$DISK" "$def" \
+				| grep -v '/$' \
+				| grep -v '/\.git/' \
+				| grep -v "^${LOCAL#$HOME/}/$HOSTNAME\.tar\.gz\(\.bak\)\?$" \
+				| grep ${BACKUP_LOG:+-v} "^${BACKUP_LOG#$HOME/}$" \
+				| tee -a $BACKUP_LOG | file-list-summary.py
+				codes=("${PIPESTATUS[@]}")
+				[ ${codes[0]} -ne 0 ] && synccode+=1
+				[ ${codes[4]} -eq 0 ] && echo
+			done
+		fi
+	done
+
+	if [ $synccode -ne 0 ]; then
+		code+=$synccode
+		echo "Done (with errors)"
+	else
+		echo "Done"
+	fi
+else
+	echo "Can't access target directory $DISK"
+fi
+
+exit $code
+
+# vim:set ts=4 sw=4 noet:
