@@ -5,6 +5,17 @@ backup-utils
 A pair of Python 3 scripts that read from backup definitions and invoke
 ``tar`` or ``rsync`` to create archives or sync files with a destination.
 
+Each line of a definition file is read as a file globbing pattern that
+describes one or more files or directories. Tilde and variable expansion is
+performed on each pattern before pathname expansion. The file may contain
+comments, which begin with a ``#`` and continue to the end of the line. To
+include a ``#`` in the pattern, escape it with a backslash or put it inside a
+double-quoted string. To include a ``"`` in the pattern, escape it with a
+backslash. The pattern is otherwise literal (including internal whitespace).
+
+If a line starts with ``@``, lines from the file(s) matching the pattern are
+read as if they were in the current definition file.
+
 
 ===========
 ``tarf.py``
@@ -17,15 +28,7 @@ archive will, by default, take the name of the corresponding input file
 without the suffix (if any), and with ``.tar`` appended.
 
 Each line is read as a globbing pattern that describes one or more files or
-directories to be added to the tar file in place. Tilde and variable expansion
-is performed on each pattern before pathname expansion. The file may contain
-comments, which begin with a ``#`` and continue to the end of the line. To
-include a ``#`` in the pattern, escape it with a backslash or put it inside a
-double-quoted string. To include a ``"`` in the pattern, escape it with a
-backslash. The pattern is otherwise literal (including internal whitespace).
-
-If a line starts with ``@``, lines from files matching the pattern are read as
-if they were in the current input file.
+directories to be added to the tar file in place.
 
 If a pattern is prefixed with the "copy" character (``%``), all matching files
 will first be copied to a temporary directory in the target directory, which
@@ -96,23 +99,14 @@ Options
 ===========
 
 Read file patterns from files or standard input and invoke ``rsync`` to
-transfer files to a destination given by the ``-t`` option. Each line is read
-as a globbing pattern for files or directories, or a descriptor for a remote
-source to be transferred.
+transfer files to a destination given by the ``-t`` option.
 
-Tilde and variable expansion is performed on each pattern before pathname
-expansion. The file may contain comments, which begin with a ``#`` and
-continue to the end of the line. To include a ``#`` in the pattern, escape it
-with a backslash or put it inside a double-quoted string. To include a ``"``
-in the pattern, escape it with a backslash. The pattern is otherwise literal
-(including internal whitespace).
-
-If a line starts with ``@``, lines from files matching the pattern are read as
-if they were in the current input file.
+Each line is read as a globbing pattern for files or directories, or a
+descriptor for a remote source to be transferred.
 
 Implied directories can be specified in the pattern to preserve directory
 structure. This is done with the first ``/./`` marker in the file pattern, as
-in newer versions of ``rsync`` (see the ``--relative`` ``rsync`` option).
+in ``rsync`` versions >= 2.6.7 (see the ``--relative`` ``rsync`` option).
 Also, any directory with a globbing pattern and all its children are
 automatically implied. Otherwise, only the path's basename is implied. So for
 example, the first two patterns will preserve the parent directory containing
@@ -183,3 +177,5 @@ Author
 
 David Liang (bmdavll at gmail.com)
 
+
+.. vim:set ts=2 sw=2 et tw=78:
